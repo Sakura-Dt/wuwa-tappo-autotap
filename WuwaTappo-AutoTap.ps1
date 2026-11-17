@@ -279,40 +279,60 @@ function Save-Settings {
     $null = [IO.Directory]::CreateDirectory($parent)
     [IO.File]::WriteAllText($settingsPath, ($script:settings | ConvertTo-Json), [Text.UTF8Encoding]::new($true))
 }
+function Get-TappoExecutable([string]$Candidate) {
+    if ([string]::IsNullOrWhiteSpace($Candidate)) { return '' }
+    try {
+        $clean = [Environment]::ExpandEnvironmentVariables($Candidate.Trim().Trim('"'))
+        if (-not [IO.Path]::IsPathRooted($clean)) { return '' }
+        if ([IO.Path]::GetFileName($clean) -ine 'WuwaTappo.exe') { return '' }
+        if ([IO.File]::Exists($clean)) { return [IO.Path]::GetFullPath($clean) }
+    } catch { }
+    return ''
+}
 function Resolve-TappoPath([string]$Preferred) {
-    $candidates = [Collections.Generic.List[string]]::new()
-    if ($Preferred) { $candidates.Add($Preferred) }
+    $found = Get-TappoExecutable $Preferred
+    if ($found) { return $found }
     foreach ($process in @(Get-Process -Name WuwaTappo -ErrorAction SilentlyContinue)) {
-        try { if ($process.Path) { $candidates.Add($process.Path) } } catch { }
+        try {
+            $found = Get-TappoExecutable $process.Path
+            if ($found) { return $found }
+        } catch { }
     }
+    $candidates = [Collections.Generic.List[string]]::new()
     foreach ($registryPath in @(
         'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')) {
         foreach ($entry in @(Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match 'Wuwa\s*Tappo' })) {
-            if ($entry.InstallLocation) {
-                $candidates.Add((Join-Path $entry.InstallLocation 'WuwaTappo.exe'))
-                $candidates.Add((Join-Path $entry.InstallLocation 'WuwaTappo\WuwaTappo.exe'))
-            }
-            if ($entry.DisplayIcon) {
-                $icon = ([string]$entry.DisplayIcon -replace ',\s*-?\d+$', '').Trim('"')
-                if ($icon -match '\.exe$') { $candidates.Add($icon) }
-            }
+            # Installer metadata may contain quotes, stale drives or invalid paths.
+            # Path.Combine does not require a mounted PowerShell drive, unlike Join-Path.
+            try {
+                if ($entry.InstallLocation) {
+                    $location = [Environment]::ExpandEnvironmentVariables(([string]$entry.InstallLocation).Trim().Trim('"'))
+                    $candidates.Add([IO.Path]::Combine($location, 'WuwaTappo.exe'))
+                    $candidates.Add([IO.Path]::Combine($location, 'WuwaTappo', 'WuwaTappo.exe'))
+                }
+            } catch { }
+            try {
+                if ($entry.DisplayIcon) {
+                    $icon = ([string]$entry.DisplayIcon -replace ',\s*-?\d+$', '').Trim().Trim('"')
+                    $candidates.Add($icon)
+                }
+            } catch { }
         }
     }
-    $roots = @($PSScriptRoot, $env:LOCALAPPDATA, (Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})
+    $roots = @($PSScriptRoot, $env:LOCALAPPDATA, ([IO.Path]::Combine($env:LOCALAPPDATA, 'Programs')), $env:ProgramFiles, ${env:ProgramFiles(x86)})
     $roots += @(Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Root -match '^[A-Za-z]:\\$' } | ForEach-Object { $_.Root })
     foreach ($root in $roots) {
         if (-not $root) { continue }
         foreach ($suffix in @('WuwaTappo.exe', 'WuwaTappo\WuwaTappo.exe', 'Wuwa Tappo\WuwaTappo.exe',
             'Wuwa Tappo\WuwaTappo\WuwaTappo.exe', 'Games\WuwaTappo\WuwaTappo.exe')) {
-            $candidates.Add((Join-Path $root $suffix))
+            try { $candidates.Add([IO.Path]::Combine($root, $suffix)) } catch { }
         }
     }
     foreach ($candidate in $candidates) {
-        if ([IO.Path]::GetFileName($candidate) -ieq 'WuwaTappo.exe' -and [IO.File]::Exists($candidate)) {
-            return [IO.Path]::GetFullPath($candidate)
-        }
+        $found = Get-TappoExecutable $candidate
+        if ($found) { return $found }
     }
     return ''
 }
