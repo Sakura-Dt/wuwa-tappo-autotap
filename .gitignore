@@ -1,0 +1,13 @@
+# Per-user paths and hotkeys
+settings.json
+settings.*.json
+.verify-*
+
+# Local archives and diagnostics
+*.zip
+*.log
+*.tmp
+*.bak
+Thumbs.db
+Desktop.ini
+.DS_Store
